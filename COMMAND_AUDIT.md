@@ -70,9 +70,9 @@ Full audit of all 2,834 registered VS Code commands. Filtered for `accept`, `all
 
 If you want to enable a currently excluded command (at your own risk):
 
-1. Open `v2/extension.js`
+1. Open `extension.js`
 2. Add the command string to the `ACCEPT_COMMANDS` array
-3. Copy to `~/.antigravity/extensions/YazanBaker.auto-accept-v2-2.0.0/extension.js`
+3. Copy to `~/.antigravity/extensions/YazanBaker.auto-accept-v2-2.1.0/`
 4. Reload Window
 
 Example — adding commit message auto-accept:
@@ -82,30 +82,6 @@ const ACCEPT_COMMANDS = [
     'git.commitMessageAccept',  // ⚠️ Auto-accepts AI commit messages
 ];
 ```
-
----
-
-## 🔍 Questions for DeepThink
-
-### 1. Hidden Antigravity-Specific Commands
-We found `antigravity.prioritized.agentAcceptAllInFile` which isn't documented anywhere. Are there other internal Antigravity commands for:
-- **Tool approval** (the "Always Allow" / "Allow this conversation" prompt) — is there a direct VS Code command for this, or is it purely webview-UI?
-- **MCP server approval** — when connecting to a new MCP server, is there a programmatic accept?
-- **Workspace trust** — `antigravity.showBrowserAllowlist` exists but only shows a list. Is there a command to programmatically add to it?
-
-### 2. `antigravity.prioritized.*` Namespace
-We found these priority commands:
-```
-antigravity.prioritized.agentAcceptAllInFile
-antigravity.prioritized.agentFocusNextFile
-antigravity.prioritized.agentFocusPreviousFile  
-antigravity.prioritized.agentRejectAllInFile
-antigravity.prioritized.explainProblem
-```
-What does the `prioritized` prefix mean? Are these dispatched through a different queue than `antigravity.agent.acceptAgentStep`? Could calling both cause conflicts?
-
-### 3. Future Command Surface
-When Antigravity adds new tools (e.g., database queries, API calls, deployment), will new `antigravity.*.accept` commands be added? Or will tool approvals always live in the webview UI layer?
 
 ---
 
