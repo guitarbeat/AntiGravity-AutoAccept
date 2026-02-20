@@ -1,6 +1,6 @@
-// Auto Accept Agent V2.1 — Production Hardened
+// AntiGravity AutoAccept v1.0.0
 // Primary: VS Code Commands API with async lock
-// Secondary: Shadow DOM-piercing CDP for "Always Allow" in webview
+// Secondary: Shadow DOM-piercing CDP for permission & action buttons
 
 const vscode = require('vscode');
 const http = require('http');
@@ -84,7 +84,51 @@ function buildPermissionScript(customTexts) {
         return null;
     }
 
-    // Fuzzy panel selector — survives ID wrapping/hashing
+    // PHASE 1: Search for "Step Requires Input" sticky banner
+    // Can be in root doc, any iframe, or behind shadow DOM
+    function findBanner(root) {
+        var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+        var node;
+        while ((node = walker.nextNode())) {
+            if (node.shadowRoot) {
+                var sr = findBanner(node.shadowRoot);
+                if (sr) return sr;
+            }
+            var txt = (node.textContent || '').trim().toLowerCase();
+            if (txt.includes('step requires input') || txt.includes('steps require input')) {
+                // Find the smallest element containing this text (avoid clicking huge parents)
+                var children = node.children;
+                for (var c = 0; c < children.length; c++) {
+                    var ct = (children[c].textContent || '').trim().toLowerCase();
+                    if (ct.includes('expand') || ct.includes('step requires input')) {
+                        return children[c];
+                    }
+                }
+                return node;
+            }
+        }
+        return null;
+    }
+    
+    // Search root doc + all iframes
+    var bannerBtn = findBanner(document);
+    if (!bannerBtn) {
+        var allIframes = document.querySelectorAll('iframe');
+        for (var fi = 0; fi < allIframes.length; fi++) {
+            try {
+                if (allIframes[fi].contentDocument) {
+                    bannerBtn = findBanner(allIframes[fi].contentDocument);
+                    if (bannerBtn) break;
+                }
+            } catch(e) {}
+        }
+    }
+    if (bannerBtn) {
+        bannerBtn.click();
+        return 'clicked:expand-banner';
+    }
+
+    // PHASE 2: Search inside agent panel iframe for permission/action buttons
     var panel = document.querySelector('iframe[id*="antigravity"][id*="agentPanel"]')
              || document.querySelector('iframe[name*="antigravity"]')
              || document.querySelector('#antigravity\\\\.agentPanel');
@@ -137,11 +181,11 @@ function updateStatusBar() {
     if (isEnabled) {
         statusBarItem.text = '$(zap) Auto: ON';
         statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-        statusBarItem.tooltip = 'Auto Accept V2.1 is ACTIVE — click to disable';
+        statusBarItem.tooltip = 'AntiGravity AutoAccept is ACTIVE — click to disable';
     } else {
         statusBarItem.text = '$(circle-slash) Auto: OFF';
         statusBarItem.backgroundColor = undefined;
-        statusBarItem.tooltip = 'Auto Accept V2.1 is OFF — click to enable';
+        statusBarItem.tooltip = 'AntiGravity AutoAccept is OFF — click to enable';
     }
 }
 
@@ -195,7 +239,9 @@ async function checkPermissionButtons() {
                 if (pages.length === 0) continue;
                 const result = await cdpEvaluate(pages[0].webSocketDebuggerUrl, script);
                 if (result && result.startsWith('clicked:')) {
-                    log(`[V2-CDP] ✓ Permission: ${result}`);
+                    log(`[CDP] ✓ ${result}`);
+                } else if (result) {
+                    log(`[CDP] ${result}`);
                 }
                 return;
             } catch (e) { /* next port */ }
@@ -209,7 +255,7 @@ function startPolling() {
 
     const config = vscode.workspace.getConfiguration('autoAcceptV2');
     const interval = config.get('pollInterval', 500);
-    log(`[V2] Polling started (every ${interval}ms, ${ACCEPT_COMMANDS.length} commands)`);
+    log(`Polling started (every ${interval}ms, ${ACCEPT_COMMANDS.length} commands)`);
 
     // VS Code commands — with async lock to prevent double-accepts
     pollIntervalId = setInterval(async () => {
@@ -234,13 +280,13 @@ function stopPolling() {
     if (pollIntervalId) { clearInterval(pollIntervalId); pollIntervalId = null; }
     if (cdpIntervalId) { clearInterval(cdpIntervalId); cdpIntervalId = null; }
     isAccepting = false;
-    log('[V2] Polling stopped');
+    log('Polling stopped');
 }
 
 // ─── Activation ───────────────────────────────────────────────────────
 function activate(context) {
-    outputChannel = vscode.window.createOutputChannel('Auto Accept V2');
-    log('[V2] Extension activating (v2.1 — production hardened)');
+    outputChannel = vscode.window.createOutputChannel('AntiGravity AutoAccept');
+    log('Extension activating (v1.0.0)');
 
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.command = 'autoAcceptV2.toggle';
@@ -250,12 +296,12 @@ function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand('autoAcceptV2.toggle', () => {
             isEnabled = !isEnabled;
-            log(`[V2] Toggled: ${isEnabled ? 'ON' : 'OFF'}`);
+            log(`Toggled: ${isEnabled ? 'ON' : 'OFF'}`);
             if (isEnabled) { startPolling(); } else { stopPolling(); }
             updateStatusBar();
             context.globalState.update('autoAcceptV2Enabled', isEnabled);
             vscode.window.showInformationMessage(
-                `Auto Accept V2: ${isEnabled ? 'ENABLED ⚡' : 'DISABLED 🔴'}`
+                `AntiGravity AutoAccept: ${isEnabled ? 'ENABLED ⚡' : 'DISABLED 🔴'}`
             );
         })
     );
@@ -267,7 +313,7 @@ function activate(context) {
     }
 
     updateStatusBar();
-    log('[V2] Extension activated');
+    log('Extension activated');
 }
 
 function deactivate() {
