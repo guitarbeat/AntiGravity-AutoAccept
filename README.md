@@ -49,10 +49,19 @@ When the Antigravity agent proposes file edits, terminal commands, or asks for t
 
 ## Settings
 
+To configure, open `Ctrl+Shift+P` → **Preferences: Open User Settings (JSON)** and add:
+
+```json
+{
+    "autoAcceptV2.pollInterval": 500,
+    "autoAcceptV2.customButtonTexts": ["your custom button text"]
+}
+```
+
 | Setting | Default | Description |
 |---|---|---|
 | `autoAcceptV2.pollInterval` | `500` | Polling interval in ms |
-| `autoAcceptV2.customButtonTexts` | `[]` | Extra button texts for i18n (e.g. `["toujours autoriser"]`) |
+| `autoAcceptV2.customButtonTexts` | `[]` | Extra button texts for i18n or custom prompts |
 
 ## Commands Polled
 
