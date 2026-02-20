@@ -26,10 +26,30 @@ const ACCEPT_COMMANDS = [
 // Future-proof against <vscode-button>, <ag-btn>, etc.
 // Build the CDP script dynamically to inject custom button texts
 function buildPermissionScript(customTexts) {
-    const allTexts = ['always allow', 'always run', 'allow this conversation', 'allow', 'accept', 'run', 'continue', 'proceed', ...customTexts];
+    const allTexts = [
+        'always allow', 'always run', 'allow this conversation', 'allow',
+        'accept', 'run', 'continue', 'proceed',
+        'expand', 'requires input',  // "Expand Bridge" — clicks sticky banner to unmask virtualized buttons
+        ...customTexts
+    ];
     return `
 (function() {
     var BUTTON_TEXTS = ${JSON.stringify(allTexts)};
+    
+    // Find closest clickable parent (for banners where text isn't directly on a button)
+    function closestClickable(node) {
+        var el = node;
+        while (el && el !== document.body) {
+            var tag = (el.tagName || '').toLowerCase();
+            if (tag === 'button' || tag.includes('button') || tag.includes('btn') ||
+                el.getAttribute('role') === 'button' || el.classList.contains('cursor-pointer') ||
+                el.onclick || el.getAttribute('tabindex') === '0') {
+                return el;
+            }
+            el = el.parentElement;
+        }
+        return node; // fallback: click the node itself
+    }
     
     // Recursive Shadow DOM piercer
     function findButton(root, text) {
@@ -48,12 +68,16 @@ function buildPermissionScript(customTexts) {
                     return node;
                 }
             }
-            // Priority 2: text content match
+            // Priority 2: text content match (with closest-clickable-parent fallback)
             var nodeText = (node.textContent || '').trim().toLowerCase();
-            if (nodeText === text) {
-                var tag2 = (node.tagName || '').toLowerCase();
-                if (tag2 === 'button' || tag2.includes('button') || node.getAttribute('role') === 'button' || tag2.includes('btn')) {
-                    return node;
+            if (nodeText === text || (text.length > 3 && nodeText.includes(text))) {
+                var clickable = closestClickable(node);
+                var tag2 = (clickable.tagName || '').toLowerCase();
+                if (tag2 === 'button' || tag2.includes('button') || clickable.getAttribute('role') === 'button' || 
+                    tag2.includes('btn') || clickable.classList.contains('cursor-pointer') ||
+                    clickable.onclick || clickable.getAttribute('tabindex') === '0' ||
+                    text === 'expand' || text === 'requires input') {
+                    return clickable;
                 }
             }
         }
