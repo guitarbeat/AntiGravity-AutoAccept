@@ -1,4 +1,4 @@
-// AntiGravity AutoAccept v1.0.0
+// AntiGravity AutoAccept v1.18.3
 // Primary: VS Code Commands API with async lock
 // Secondary: Shadow DOM-piercing CDP for permission & action buttons
 
@@ -7,36 +7,44 @@ const http = require('http');
 const WebSocket = require('ws');
 
 // ─── VS Code Commands ─────────────────────────────────────────────────
-// Verified from Antigravity package.json + runtime dump (2,914 commands)
-// NOTE: notification.acceptPrimaryAction deliberately EXCLUDED —
-//       it would auto-click destructive notifications (delete, restart, etc.)
+// Only Antigravity-specific commands — generic VS Code commands like
+// chatEditing.acceptAllFiles cause sidebar interference (Outline toggling,
+// folder collapsing) when the agent panel lacks focus.
 const ACCEPT_COMMANDS = [
     'antigravity.agent.acceptAgentStep',
     'antigravity.terminalCommand.accept',
     'antigravity.terminalCommand.run',
     'antigravity.command.accept',
-    'chatEditing.acceptAllFiles',
-    'chatEditing.acceptFile',
-    'inlineChat.acceptChanges',
-    'interactive.acceptChanges',
 ];
 
-// ─── Shadow DOM-Piercing Permission Clicker ───────────────────────────
-// Searches through Shadow DOMs and nested iframes for "Always Allow"
-// Future-proof against <vscode-button>, <ag-btn>, etc.
-// Build the CDP script dynamically to inject custom button texts
+// ─── Webview-Isolated Permission Clicker ──────────────────────────────
+// Uses a Webview Guard to prevent execution on the main VS Code window.
+// The agent panel runs in an isolated Chromium process (OOPIF) since
+// VS Code's migration to Out-Of-Process Iframes.
 function buildPermissionScript(customTexts) {
     const allTexts = [
-        'always allow', 'always run', 'allow this conversation', 'allow',
-        'accept', 'run', 'continue', 'proceed',
-        'expand', 'requires input',  // "Expand Bridge" — clicks sticky banner to unmask virtualized buttons
+        'run', 'accept',  // Primary action buttons first ("Run Alt+d", "Accept")
+        'always allow', 'allow this conversation', 'allow',
+        'continue', 'proceed',
         ...customTexts
     ];
     return `
 (function() {
     var BUTTON_TEXTS = ${JSON.stringify(allTexts)};
     
-    // Find closest clickable parent (for banners where text isn't directly on a button)
+    // ═══ WEBVIEW GUARD ═══
+    // Check for Antigravity agent panel DOM markers.
+    // The panel has .react-app-container; the main VS Code window doesn't.
+    // This prevents false positives (sidebars, markdown, menus).
+    if (!document.querySelector('.react-app-container') && 
+        !document.querySelector('[class*="agent"]') &&
+        !document.querySelector('[data-vscode-context]')) {
+        return 'not-agent-panel';
+    }
+    
+    // We are safely inside the isolated agent panel webview.
+    // document.body IS the agent panel — no iframe needed.
+    
     function closestClickable(node) {
         var el = node;
         while (el && el !== document.body) {
@@ -48,10 +56,9 @@ function buildPermissionScript(customTexts) {
             }
             el = el.parentElement;
         }
-        return node; // fallback: click the node itself
+        return node;
     }
     
-    // Recursive Shadow DOM piercer
     function findButton(root, text) {
         var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
         var node;
@@ -60,7 +67,6 @@ function buildPermissionScript(customTexts) {
                 var result = findButton(node.shadowRoot, text);
                 if (result) return result;
             }
-            // Priority 1: data-testid / data-action attributes (i18n-safe)
             var testId = (node.getAttribute('data-testid') || node.getAttribute('data-action') || '').toLowerCase();
             if (testId.includes('alwaysallow') || testId.includes('always-allow') || testId.includes('allow')) {
                 var tag1 = (node.tagName || '').toLowerCase();
@@ -68,9 +74,8 @@ function buildPermissionScript(customTexts) {
                     return node;
                 }
             }
-            // Priority 2: text content match (with closest-clickable-parent fallback)
             var nodeText = (node.textContent || '').trim().toLowerCase();
-            if (nodeText === text || (text.length > 3 && nodeText.includes(text))) {
+            if (nodeText === text || (text.length >= 3 && nodeText.startsWith(text))) {
                 var clickable = closestClickable(node);
                 var tag2 = (clickable.tagName || '').toLowerCase();
                 if (tag2 === 'button' || tag2.includes('button') || clickable.getAttribute('role') === 'button' || 
@@ -83,78 +88,12 @@ function buildPermissionScript(customTexts) {
         }
         return null;
     }
-
-    // PHASE 1: Search for "Step Requires Input" sticky banner
-    // Can be in root doc, any iframe, or behind shadow DOM
-    function findBanner(root) {
-        var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-        var node;
-        while ((node = walker.nextNode())) {
-            if (node.shadowRoot) {
-                var sr = findBanner(node.shadowRoot);
-                if (sr) return sr;
-            }
-            var txt = (node.textContent || '').trim().toLowerCase();
-            if (txt.includes('step requires input') || txt.includes('steps require input')) {
-                // Find the smallest element containing this text (avoid clicking huge parents)
-                var children = node.children;
-                for (var c = 0; c < children.length; c++) {
-                    var ct = (children[c].textContent || '').trim().toLowerCase();
-                    if (ct.includes('expand') || ct.includes('step requires input')) {
-                        return children[c];
-                    }
-                }
-                return node;
-            }
-        }
-        return null;
-    }
     
-    // Search root doc + all iframes
-    var bannerBtn = findBanner(document);
-    if (!bannerBtn) {
-        var allIframes = document.querySelectorAll('iframe');
-        for (var fi = 0; fi < allIframes.length; fi++) {
-            try {
-                if (allIframes[fi].contentDocument) {
-                    bannerBtn = findBanner(allIframes[fi].contentDocument);
-                    if (bannerBtn) break;
-                }
-            } catch(e) {}
-        }
-    }
-    if (bannerBtn) {
-        bannerBtn.click();
-        return 'clicked:expand-banner';
-    }
-
-    // PHASE 2: Search inside agent panel iframe for permission/action buttons
-    var panel = document.querySelector('iframe[id*="antigravity"][id*="agentPanel"]')
-             || document.querySelector('iframe[name*="antigravity"]')
-             || document.querySelector('#antigravity\\\\.agentPanel');
-    if (!panel) return 'no-panel';
-    
-    var doc;
-    try { doc = panel.contentDocument; } catch(e) { return 'cross-origin'; }
-    if (!doc) return 'no-doc';
-    
-    // Collect all accessible documents (panel + nested iframes)
-    var docs = [doc];
-    try {
-        var iframes = doc.querySelectorAll('iframe');
-        for (var i = 0; i < iframes.length; i++) {
-            try { if (iframes[i].contentDocument) docs.push(iframes[i].contentDocument); } catch(e) {}
-        }
-    } catch(e) {}
-    
-    // Search each document for permission buttons (priority order)
     for (var t = 0; t < BUTTON_TEXTS.length; t++) {
-        for (var d = 0; d < docs.length; d++) {
-            var btn = findButton(docs[d], BUTTON_TEXTS[t]);
-            if (btn) {
-                btn.click();
-                return 'clicked:' + BUTTON_TEXTS[t];
-            }
+        var btn = findButton(document.body, BUTTON_TEXTS[t]);
+        if (btn) {
+            btn.click();
+            return 'clicked:' + BUTTON_TEXTS[t];
         }
     }
     return 'no-permission-button';
@@ -224,6 +163,124 @@ function cdpEvaluate(wsUrl, expression) {
     });
 }
 
+// Send multiple CDP commands over one WebSocket connection
+function cdpSendMulti(wsUrl, commands) {
+    return new Promise((resolve, reject) => {
+        const ws = new WebSocket(wsUrl);
+        const timeout = setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 3000);
+        const results = {};
+        let nextId = 1;
+        const pending = [];
+
+        ws.on('open', () => {
+            for (const cmd of commands) {
+                const id = nextId++;
+                cmd._id = id;
+                pending.push(id);
+                ws.send(JSON.stringify({ id, method: cmd.method, params: cmd.params || {} }));
+            }
+        });
+        ws.on('message', (data) => {
+            const msg = JSON.parse(data.toString());
+            if (msg.id) {
+                results[msg.id] = msg.result || msg.error;
+                const idx = pending.indexOf(msg.id);
+                if (idx !== -1) pending.splice(idx, 1);
+                if (pending.length === 0) {
+                    clearTimeout(timeout);
+                    ws.close();
+                    resolve(results);
+                }
+            }
+        });
+        ws.on('error', () => { clearTimeout(timeout); reject(new Error('ws-error')); });
+    });
+}
+
+// Use CDP DOM protocol to pierce closed shadow DOMs and click the banner
+async function clickBannerViaDom(wsUrl) {
+    return new Promise((resolve, reject) => {
+        const ws = new WebSocket(wsUrl);
+        const timeout = setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 3000);
+        let msgId = 1;
+
+        function send(method, params = {}) {
+            const id = msgId++;
+            ws.send(JSON.stringify({ id, method, params }));
+            return id;
+        }
+
+        const handlers = {};
+        ws.on('message', (raw) => {
+            const msg = JSON.parse(raw.toString());
+            if (msg.id && handlers[msg.id]) handlers[msg.id](msg);
+        });
+        ws.on('error', () => { clearTimeout(timeout); reject(new Error('ws-error')); });
+
+        ws.on('open', () => {
+            // Step 1: Get full DOM tree piercing shadow DOMs
+            const docId = send('DOM.getDocument', { depth: -1, pierce: true });
+            handlers[docId] = (msg) => {
+                if (!msg.result) { clearTimeout(timeout); ws.close(); resolve(null); return; }
+
+                // Step 2: Search for "Expand" text near the banner
+                const searchId = send('DOM.performSearch', { query: 'Expand' });
+                handlers[searchId] = (msg2) => {
+                    const count = msg2.result?.resultCount || 0;
+                    if (count === 0) { clearTimeout(timeout); ws.close(); resolve(null); return; }
+
+                    // Step 3: Get search result nodes
+                    const getResultsId = send('DOM.getSearchResults', {
+                        searchId: msg2.result.searchId,
+                        fromIndex: 0,
+                        toIndex: Math.min(count, 10)
+                    });
+                    handlers[getResultsId] = (msg3) => {
+                        const nodeIds = msg3.result?.nodeIds || [];
+                        if (nodeIds.length === 0) { clearTimeout(timeout); ws.close(); resolve(null); return; }
+
+                        // Step 4: Try each node — get its box model and click at center
+                        let tried = 0;
+                        function tryNode(idx) {
+                            if (idx >= nodeIds.length) {
+                                clearTimeout(timeout); ws.close(); resolve(null); return;
+                            }
+                            const boxId = send('DOM.getBoxModel', { nodeId: nodeIds[idx] });
+                            handlers[boxId] = (boxMsg) => {
+                                tried++;
+                                const quad = boxMsg.result?.model?.content;
+                                if (!quad || quad.length < 4) {
+                                    tryNode(idx + 1); return; // not visible, try next
+                                }
+                                // Calculate center of the element
+                                const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+                                const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+                                if (x === 0 && y === 0) { tryNode(idx + 1); return; }
+
+                                // Step 5: Real mouse click at center coordinates
+                                const downId = send('Input.dispatchMouseEvent', {
+                                    type: 'mousePressed', x, y, button: 'left', clickCount: 1
+                                });
+                                handlers[downId] = () => {
+                                    const upId = send('Input.dispatchMouseEvent', {
+                                        type: 'mouseReleased', x, y, button: 'left', clickCount: 1
+                                    });
+                                    handlers[upId] = () => {
+                                        clearTimeout(timeout);
+                                        ws.close();
+                                        resolve(`clicked:expand-mouse[${Math.round(x)},${Math.round(y)}]`);
+                                    };
+                                };
+                            };
+                        }
+                        tryNode(0);
+                    };
+                };
+            };
+        });
+    });
+}
+
 // Wider port scan: 9000-9014 + common Chromium/Node defaults
 const CDP_PORTS = [9222, 9229, ...Array.from({ length: 15 }, (_, i) => 9000 + i)];
 
@@ -237,11 +294,16 @@ async function checkPermissionButtons() {
             try {
                 const pages = await cdpGetPages(port);
                 if (pages.length === 0) continue;
-                const result = await cdpEvaluate(pages[0].webSocketDebuggerUrl, script);
-                if (result && result.startsWith('clicked:')) {
-                    log(`[CDP] ✓ ${result}`);
-                } else if (result) {
-                    log(`[CDP] ${result}`);
+                // Evaluate on all targets — the Webview Guard inside the script
+                // handles isolation (non-webview targets return 'ignored-main-window')
+                for (let i = 0; i < pages.length; i++) {
+                    try {
+                        const result = await cdpEvaluate(pages[i].webSocketDebuggerUrl, script);
+                        if (result && result.startsWith('clicked:')) {
+                            log(`[CDP] ✓ ${result}`);
+                            return;
+                        }
+                    } catch (e) { /* next webview */ }
                 }
                 return;
             } catch (e) { /* next port */ }
@@ -283,10 +345,134 @@ function stopPolling() {
     log('Polling stopped');
 }
 
+// ─── CDP Auto-Fix: Detect & Repair ───────────────────────────────────
+const cp = require('child_process');
+
+function checkAndFixCDP() {
+    return new Promise((resolve) => {
+        const req = http.get({ hostname: '127.0.0.1', port: 9222, path: '/json/list', timeout: 2000 }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                log('[CDP] Debug port active ✓');
+                resolve(true);
+            });
+        });
+        req.on('error', (err) => {
+            if (err.code === 'ECONNREFUSED') {
+                log('[CDP] ⚠ Port 9222 refused — remote debugging not enabled');
+                // Fire the notification (non-blocking) — handle clicks via .then()
+                vscode.window.showErrorMessage(
+                    '⚡ AutoAccept needs Debug Mode to click buttons. Port 9222 is not open.',
+                    'Auto-Fix Shortcut (Windows)',
+                    'Manual Guide'
+                ).then(action => {
+                    if (action === 'Auto-Fix Shortcut (Windows)') {
+                        applyPermanentWindowsPatch();
+                    } else if (action === 'Manual Guide') {
+                        vscode.env.openExternal(vscode.Uri.parse('https://github.com/yazanbaker94/AntiGravity-AutoAccept#setup'));
+                    }
+                });
+            }
+            resolve(false);
+        });
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+    });
+}
+
+function applyPermanentWindowsPatch() {
+    if (process.platform !== 'win32') {
+        vscode.window.showInformationMessage('Auto-patching is Windows-only. Use the Manual Guide.');
+        return;
+    }
+
+    const os = require('os');
+    const fs = require('fs');
+    const path = require('path');
+
+    // Write a .ps1 file to avoid inline escaping issues with --remote-debugging-port
+    const psFile = path.join(os.tmpdir(), 'antigravity_patch_shortcut.ps1');
+    const psContent = `
+$flag = "--remote-debugging-port=9222"
+$WshShell = New-Object -comObject WScript.Shell
+$paths = @(
+    "$env:USERPROFILE\\Desktop",
+    "$env:PUBLIC\\Desktop",
+    "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs",
+    "$env:ALLUSERSPROFILE\\Microsoft\\Windows\\Start Menu\\Programs"
+)
+$patched = $false
+foreach ($dir in $paths) {
+    if (Test-Path $dir) {
+        $files = Get-ChildItem -Path $dir -Filter "*.lnk" -Recurse -ErrorAction SilentlyContinue
+        foreach ($file in $files) {
+            $shortcut = $WshShell.CreateShortcut($file.FullName)
+            if ($shortcut.TargetPath -like "*Antigravity*") {
+                if ($shortcut.Arguments -notlike "*remote-debugging-port*") {
+                    $shortcut.Arguments = ($shortcut.Arguments + " " + $flag).Trim()
+                    $shortcut.Save()
+                    $patched = $true
+                    Write-Output "PATCHED: $($file.FullName)"
+                }
+            }
+        }
+    }
+}
+if ($patched) { Write-Output "SUCCESS" } else { Write-Output "NOT_FOUND" }
+`;
+
+    try {
+        fs.writeFileSync(psFile, psContent, 'utf8');
+    } catch (e) {
+        log(`[CDP] Failed to write patcher script: ${e.message}`);
+        vscode.window.showWarningMessage('Could not create patcher script. Please add the flag manually.');
+        return;
+    }
+
+    log('[CDP] Running shortcut patcher...');
+    cp.exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psFile}"`, (err, stdout, stderr) => {
+        // Clean up temp file
+        try { fs.unlinkSync(psFile); } catch (e) { }
+
+        if (err) {
+            log(`[CDP] Patcher error: ${err.message}`);
+            log(`[CDP] stderr: ${stderr}`);
+            vscode.window.showWarningMessage('Shortcut patching failed. Please add the flag manually.');
+            return;
+        }
+        log(`[CDP] Patcher output: ${stdout.trim()}`);
+        if (stdout.includes('SUCCESS')) {
+            log('[CDP] ✓ Shortcut patched!');
+            vscode.window.showInformationMessage(
+                '✅ Shortcut updated! Restart Antigravity for the fix to take effect.',
+                'Restart Now'
+            ).then(action => {
+                if (action === 'Restart Now') applyTemporarySessionRestart();
+            });
+        } else {
+            log('[CDP] No matching shortcuts found');
+            vscode.window.showWarningMessage(
+                'No Antigravity shortcut found on Desktop or Start Menu. Add --remote-debugging-port=9222 to your shortcut manually.'
+            );
+        }
+    });
+}
+
+function applyTemporarySessionRestart() {
+    vscode.window.showInformationMessage(
+        '✅ Closing Antigravity — reopen from your Desktop/Start Menu shortcut to activate Debug Mode.',
+        'Close Now'
+    ).then(action => {
+        if (action === 'Close Now') {
+            vscode.commands.executeCommand('workbench.action.quit');
+        }
+    });
+}
+
 // ─── Activation ───────────────────────────────────────────────────────
 function activate(context) {
     outputChannel = vscode.window.createOutputChannel('AntiGravity AutoAccept');
-    log('Extension activating (v1.0.0)');
+    log('Extension activating (v1.18.3)');
 
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.command = 'autoAcceptV2.toggle';
@@ -306,14 +492,20 @@ function activate(context) {
         })
     );
 
-    // Restore saved state
-    if (context.globalState.get('autoAcceptV2Enabled', false)) {
-        isEnabled = true;
-        startPolling();
-    }
-
-    updateStatusBar();
-    log('Extension activated');
+    // Check CDP on activation — prompt auto-fix if port 9222 is closed
+    checkAndFixCDP().then(cdpOk => {
+        if (cdpOk) {
+            // Restore saved state
+            if (context.globalState.get('autoAcceptV2Enabled', false)) {
+                isEnabled = true;
+                startPolling();
+            }
+        } else {
+            log('CDP not available — bot will not start until debug port is enabled');
+        }
+        updateStatusBar();
+        log('Extension activated');
+    });
 }
 
 function deactivate() {

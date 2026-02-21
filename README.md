@@ -1,5 +1,7 @@
 # AntiGravity AutoAccept
 
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/yazanbaker)
+
 Automatically accept agent steps, terminal commands, file edits, and permission prompts in [Antigravity](https://antigravity.dev) — Google's AI coding assistant.
 
 ## What it does
@@ -10,33 +12,32 @@ When the Antigravity agent proposes file edits, terminal commands, or asks for t
 
 | Strategy | What it handles | How |
 |---|---|---|
-| **VS Code Commands** (500ms) | File edits, terminal commands, inline chat, agent steps | Calls Antigravity's native accept commands |
-| **Targeted CDP** (1500ms) | "Always Allow" / "Allow this conversation" permission dialogs | Shadow DOM-piercing button clicker, scoped to agent panel only |
+| **VS Code Commands** (500ms) | Agent steps, terminal commands | Calls Antigravity's native accept commands |
+| **CDP + Webview Guard** (1500ms) | Run, Accept, Always Allow buttons | Isolated script runs only inside the agent panel |
 
-## Features
+## Setup
 
-- **⚡ 8 VS Code commands** polled with async lock (prevents double-accepts)
-- **🔒 Shadow DOM piercing** — survives `<vscode-button>`, `<ag-btn>`, Web Components
-- **🌍 i18n-safe** — checks `data-testid` attributes before text matching
-- **🔌 17-port CDP scan** — finds Antigravity's debug port automatically
-- **📊 Status bar toggle** — click `⚡ Auto: ON` to toggle, state persists across reloads
-- **🚫 Zero UI interference** — works minimized, unfocused, in background
-- **235 lines** of code, ~10KB total
+### 1. Enable Debug Mode (Required)
 
-## Installation
+The extension needs Chrome DevTools Protocol to click buttons. On first launch, if the debug port is not open, the extension will show an error with **"Auto-Fix Shortcut (Windows)"** — click it to automatically patch your shortcut.
 
-### From VSIX (recommended)
+**Manual method:** Right-click your Antigravity shortcut → Properties → add to Target:
+```
+--remote-debugging-port=9222
+```
 
+### 2. Install the Extension
+
+**From VSIX (recommended):**
 1. Download the latest `.vsix` from [Releases](https://github.com/yazanbaker94/AntiGravity-AutoAccept/releases/)
 2. In Antigravity: `Ctrl+Shift+P` → `Extensions: Install from VSIX`
 3. Select the downloaded file
 4. Reload Window
 
-### Manual
-
+**Manual:**
 1. Copy `extension.js` and `package.json` to:
    ```
-   ~/.antigravity/extensions/YazanBaker.antigravity-autoaccept-1.0.0/
+   ~/.antigravity/extensions/YazanBaker.antigravity-autoaccept-1.18.3/
    ```
 2. Run `npm install` in that directory (installs `ws` dependency)
 3. Reload Window
@@ -49,67 +50,39 @@ When the Antigravity agent proposes file edits, terminal commands, or asks for t
 
 ## Settings
 
-To configure, open `Ctrl+Shift+P` → **Preferences: Open User Settings (JSON)** and add:
-
-```json
-{
-    "autoAcceptV2.pollInterval": 500,
-    "autoAcceptV2.customButtonTexts": ["your custom button text"]
-}
-```
-
 | Setting | Default | Description |
 |---|---|---|
 | `autoAcceptV2.pollInterval` | `500` | Polling interval in ms |
 | `autoAcceptV2.customButtonTexts` | `[]` | Extra button texts for i18n or custom prompts |
 
-## Commands Polled
+## How it Works
 
-| Command | Purpose |
-|---|---|
-| `antigravity.agent.acceptAgentStep` | File edits, proceed prompts |
-| `antigravity.terminalCommand.accept` | Terminal command prompts |
-| `antigravity.terminalCommand.run` | Execute terminal commands |
-| `antigravity.command.accept` | Inline editor commands |
-| `chatEditing.acceptAllFiles` | Batch file acceptance |
-| `chatEditing.acceptFile` | Individual file acceptance |
-| `inlineChat.acceptChanges` | Inline chat suggestions |
-| `interactive.acceptChanges` | Interactive session changes |
+### Webview Guard
+Antigravity's agent panel runs in an isolated Chromium process (OOPIF). The extension evaluates JavaScript on all CDP targets, but a **Webview Guard** checks for `.react-app-container` in the DOM — if it's not present, the script exits immediately. This prevents false positives on the main VS Code window (sidebars, markdown, menus).
 
-See [COMMAND_AUDIT.md](COMMAND_AUDIT.md) for the full audit of 2,834 commands — why each was included or excluded.
+### Button Detection
+Inside the agent panel, a `TreeWalker` searches for buttons by text content using `startsWith` matching:
+
+| Priority | Text | Matches |
+|---|---|---|
+| 1 | `run` | "Run Alt+d" button ✅ (not "Always run ^" dropdown) |
+| 2 | `accept` | Accept button |
+| 3 | `always allow` | Permission prompts |
+| 4 | `allow` | Permission prompts |
+| 5 | `continue`, `proceed` | Continuation prompts |
+
+### CDP Auto-Fix
+On activation, the extension checks if port 9222 is open. If not, it shows a notification with:
+- **Auto-Fix Shortcut (Windows)** — patches your `.lnk` shortcut via PowerShell
+- **Manual Guide** — links to this README
 
 ## Safety
 
 Commands deliberately **excluded** to prevent harm:
-
-- `notification.acceptPrimaryAction` — would auto-click "Yes" on destructive dialogs
-- `workbench.action.chat.editToolApproval` — spams config UI
-- `antigravity.prioritized.agentAcceptAllInFile` — causes dual write-locks
+- `notification.acceptPrimaryAction` — would auto-click destructive dialogs
+- `chatEditing.acceptAllFiles` — causes sidebar Outline toggling
 - All merge/git conflict commands — could silently pick wrong side
 - All autocomplete/suggestion commands — would corrupt typing
-
-## Architecture
-
-```
-┌──────────────────────────────────────────┐
-│  AntiGravity AutoAccept v1.0.0           │
-│  ~235 lines │ ~10KB │ YazanBaker         │
-├──────────────────────────────────────────┤
-│                                          │
-│  Strategy 1: VS Code Commands (500ms)    │
-│  ├─ 8 commands, async-locked             │
-│  ├─ Promise.allSettled (no double-fire)  │
-│  └─ Handles 95% of accept actions        │
-│                                          │
-│  Strategy 2: Targeted CDP (1500ms)       │
-│  ├─ Shadow DOM piercing TreeWalker       │
-│  ├─ data-testid priority (i18n-safe)     │
-│  ├─ 8 button texts + custom setting      │
-│  ├─ Fuzzy panel selector                 │
-│  └─ Handles permission dialogs only      │
-│                                          │
-└──────────────────────────────────────────┘
-```
 
 ## License
 

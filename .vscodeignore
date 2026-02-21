@@ -1,7 +1,9 @@
 **/*.test.js
 test/
+test_cdp*
 .vscode/
 .git/
 .github/
 .agent/
 *.vsix
+COMMAND_AUDIT.md

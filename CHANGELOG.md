@@ -1,29 +1,34 @@
 # Changelog
 
+## [1.18.3] — 2026-02-21
+
+### Webview Guard Architecture (OOPIF migration fix)
+- **Webview Guard**: DOM-marker check (`.react-app-container`) prevents execution on main VS Code window
+- **startsWith matching**: "Run Alt+d" matches `run`, but "Always run ^" dropdown doesn't
+- **Priority reorder**: `run` and `accept` checked before `always allow`
+- **Removed dangerous commands**: `chatEditing.acceptAllFiles`, `inlineChat.acceptChanges` etc. removed (caused sidebar interference)
+- **Removed problematic texts**: `expand` (infinite click loop), `always run` (clicked dropdown toggle)
+
+### CDP Auto-Fix
+- **Detection**: Extension checks CDP port 9222 on activation
+- **Auto-Fix Shortcut**: PowerShell patcher finds Antigravity shortcuts and adds `--remote-debugging-port=9222`
+- **Manual Guide**: Links to GitHub README setup instructions
+
+### Safety
+- Script exits immediately on non-agent-panel targets
+- Only Antigravity-specific VS Code commands in polling loop
+- Clean logging — only actual button clicks are logged
+
+---
+
 ## [2.1.0] — 2025-02-20
 
 ### Complete Rewrite (V2)
-- **Replaced** 1,435-line CDP DOM scraper with 235-line hybrid architecture
-- **Primary:** VS Code Commands API with async lock (8 commands, 500ms polling)
-- **Secondary:** Targeted CDP with Shadow DOM piercing for permission dialogs only
-
-### Production Hardening (DeepThink Audit)
-- Added async lock (`isAccepting` guard + `Promise.allSettled`) to prevent race conditions
-- Shadow DOM piercing `TreeWalker` — survives `<vscode-button>`, `<ag-btn>`, Web Components
-- `data-testid` / `data-action` attribute matching before text matching (i18n-safe)
-- Fuzzy panel selector (`iframe[id*="antigravity"]`) — survives ID wrapping
-- Wider CDP port scan (17 ports: 9000-9014 + 9222, 9229)
-- `customButtonTexts` setting for i18n escape hatch
-
-### Safety
-- Excluded `notification.acceptPrimaryAction` (auto-clicks destructive dialogs)
-- Excluded `workbench.action.chat.editToolApproval` (spams config UI)
-- Excluded `antigravity.prioritized.agentAcceptAllInFile` (dual write-lock risk)
-- Excluded `chat.toolOutput.save` (spams file-save dialogs)
-- Full audit of 2,834 commands documented in COMMAND_AUDIT.md
+- **Replaced** 1,435-line CDP DOM scraper with hybrid architecture
+- **Primary:** VS Code Commands API with async lock
+- **Secondary:** Targeted CDP with Shadow DOM piercing for permission dialogs
 
 ### Removed
 - All CDP DOM scraping code (1,435 lines)
 - Settings panel UI (34KB)
 - 18 main_scripts helper files
-- Command dump debug code
