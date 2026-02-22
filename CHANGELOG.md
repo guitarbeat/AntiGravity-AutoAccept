@@ -7,6 +7,12 @@
 - **Added** `[CDP-DBG]` diagnostic logging: captures exception type, subtype, error description, and line number on evaluation failures.
 - **Added** per-cycle target count logging (`Port 9222: N targets`) for better polling visibility.
 
+### Concurrent Broadcast (Multi-Chat Support)
+- **Parallel CDP evaluation**: Replaced sequential `for` loop with `Promise.allSettled()` — all webview targets are evaluated simultaneously.
+- **Webview filtering**: Only `vscode-webview://` targets are evaluated; service workers and main window are skipped.
+- **Per-target cooldowns**: Expand cooldown is now tracked per chat thread (`lastExpandTimes[targetId]`), so one chat's cooldown doesn't lock another.
+- **Multi-chat hack**: Use `File → Duplicate Workspace` to run two agent chats in separate windows — bot auto-clicks both simultaneously.
+
 ---
 
 ## [1.18.3] — 2026-02-21
