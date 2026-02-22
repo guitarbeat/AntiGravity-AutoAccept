@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.18.4] — 2026-02-22
+
+### CDP Script Fix
+- **Fixed** critical `SyntaxError: Unexpected string` that silently broke all CDP script evaluations. Root cause: a code comment containing `\necho "test"\n` inside a template literal — the `\n` was interpreted as actual newlines, breaking the script at line 49.
+- **Added** `[CDP-DBG]` diagnostic logging: captures exception type, subtype, error description, and line number on evaluation failures.
+- **Added** per-cycle target count logging (`Port 9222: N targets`) for better polling visibility.
+
+---
+
 ## [1.18.3] — 2026-02-21
 
 ### Webview Guard Architecture (OOPIF migration fix)
