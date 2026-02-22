@@ -48,6 +48,17 @@ The extension needs Chrome DevTools Protocol to click buttons. On first launch, 
 - **Or:** `Ctrl+Shift+P` → `AntiGravity AutoAccept: Toggle ON/OFF`
 - **Logs:** Output panel → `AntiGravity AutoAccept`
 
+## Multi-Agent Workflow
+
+Antigravity's IDE locks the agent chat panel to the sidebar, which means if you open two chat tabs, VS Code will completely unmount the hidden tab's DOM to save memory. 
+
+To run multiple agents simultaneously and have the bot auto-click commands for all of them:
+
+1. Click **File → Duplicate Workspace**
+2. This opens a second VS Code window connected to the same project
+3. Start a chat in Window 1 and another chat in Window 2
+4. The extension's concurrent broadcast architecture will detect both webviews and **auto-click buttons in both windows simultaneously!**
+
 ## Settings
 
 | Setting | Default | Description |
