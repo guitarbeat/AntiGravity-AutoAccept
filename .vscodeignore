@@ -1,6 +1,5 @@
 **/*.test.js
 test/
-!node_modules
 test_cdp*
 .vscode/
 .git/

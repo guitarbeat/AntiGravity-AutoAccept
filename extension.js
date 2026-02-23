@@ -58,12 +58,12 @@ function buildPermissionScript(customTexts) {
         return node;
     }
     
-    function findButton(root, text, useIncludes) {
+    function findButton(root, text) {
         var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
         var node;
         while ((node = walker.nextNode())) {
             if (node.shadowRoot) {
-                var result = findButton(node.shadowRoot, text, useIncludes);
+                var result = findButton(node.shadowRoot, text);
                 if (result) return result;
             }
             var testId = (node.getAttribute('data-testid') || node.getAttribute('data-action') || '').toLowerCase();
@@ -77,7 +77,13 @@ function buildPermissionScript(customTexts) {
             // Length cap: real buttons have short text (< 50 chars).
             // Skip large container elements that happen to start with button text.
             if (nodeText.length > 50) continue;
-            if (nodeText === text || (text.length >= 3 && (useIncludes ? nodeText.includes(text) : nodeText.startsWith(text)))) {
+            // Matching rules:
+            // - Exact match always works
+            // - startsWith only for terms >= 5 chars (avoids 'run' matching random text)
+            // - For startsWith, the matched text can't be more than 3x the search term length
+            var isMatch = nodeText === text || 
+                (text.length >= 5 && nodeText.startsWith(text) && nodeText.length <= text.length * 3);
+            if (isMatch) {
                 var clickable = closestClickable(node);
                 var tag2 = (clickable.tagName || '').toLowerCase();
                 if (tag2 === 'button' || tag2.includes('button') || clickable.getAttribute('role') === 'button' || 
@@ -87,6 +93,11 @@ function buildPermissionScript(customTexts) {
                     // Idempotency guard: skip disabled/loading buttons
                     if (clickable.disabled || clickable.getAttribute('aria-disabled') === 'true' ||
                         clickable.classList.contains('loading') || clickable.querySelector('.codicon-loading')) {
+                        return null;
+                    }
+                    // Skip elements we already clicked recently (5s cooldown per element)
+                    var lastClickTime = parseInt(clickable.getAttribute('data-aa-t') || '0', 10);
+                    if (lastClickTime && (Date.now() - lastClickTime < 5000)) {
                         return null;
                     }
                     return clickable;
@@ -100,6 +111,7 @@ function buildPermissionScript(customTexts) {
     for (var t = 0; t < BUTTON_TEXTS.length; t++) {
         var btn = findButton(document.body, BUTTON_TEXTS[t]);
         if (btn) {
+            btn.setAttribute('data-aa-t', '' + Date.now());
             btn.click();
             return 'clicked:' + BUTTON_TEXTS[t];
         }
@@ -110,8 +122,9 @@ function buildPermissionScript(customTexts) {
     if (typeof CAN_EXPAND === 'undefined' || CAN_EXPAND) {
         var expandTexts = ['expand', 'requires input'];
         for (var e = 0; e < expandTexts.length; e++) {
-            var expBtn = findButton(document.body, expandTexts[e], true);
+            var expBtn = findButton(document.body, expandTexts[e]);
             if (expBtn) {
+                expBtn.setAttribute('data-aa-t', '' + Date.now());
                 expBtn.click();
                 return 'clicked:' + expandTexts[e];
             }
@@ -259,7 +272,7 @@ function multiplexCdpWebviews(port, scriptGenerator) {
                                         if (result.includes('expand') || result.includes('requires input')) {
                                             lastExpandTimes[page.targetId] = Date.now();
                                         }
-                                        log(`[CDP] ✓ Thread [${page.targetId.substring(0, 6)}] -> ${result}`);
+                                        log(`[CDP] \u2713 Thread [${page.targetId.substring(0, 6)}] -> ${result}`);
                                     }
                                 }
 
@@ -291,7 +304,7 @@ function multiplexCdpWebviews(port, scriptGenerator) {
                                     if (result.includes('expand') || result.includes('requires input')) {
                                         lastExpandTimes[targetId] = Date.now();
                                     }
-                                    log(`[CDP] ✓ Thread [${shortId}] -> ${result}`);
+                                    log(`[CDP] \u2713 Thread [${shortId}] -> ${result}`);
                                 }
 
                                 await send('Target.detachFromTarget', { sessionId }).catch(() => { });

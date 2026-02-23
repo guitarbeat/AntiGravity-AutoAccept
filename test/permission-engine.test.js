@@ -281,9 +281,9 @@ test('"Requires Input" banner clicked (startsWith match)', () => {
     eq(run(makeDoc([btn])), 'clicked:requires input');
 });
 
-test('"1 Step Requires Input" clicked (includes match)', () => {
+test('"1 Step Requires Input" does NOT match (prefix mismatch)', () => {
     const btn = new El('BUTTON', '1 Step Requires Input');
-    eq(run(makeDoc([btn])), 'clicked:requires input');
+    eq(run(makeDoc([btn])), 'no-permission-button');
 });
 
 test('expand skipped when CAN_EXPAND=false', () => {
