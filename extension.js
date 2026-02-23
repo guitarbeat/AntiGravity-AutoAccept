@@ -145,6 +145,7 @@ let outputChannel = null;
 let lastExpandTimes = {}; // Per-target cooldown to prevent expand toggle loops
 let isCdpBusy = false; // Async lock for CDP polling — prevents overlapping broadcasts
 let activeCdpPort = null; // Caches the successful port to prevent over-scanning
+let cdpCycleCount = 0; // Diagnostic: counts CDP poll cycles for periodic status logging
 
 function log(msg) {
     if (outputChannel) {
@@ -233,86 +234,71 @@ function multiplexCdpWebviews(port, scriptGenerator) {
                     const targetsMsg = await send('Target.getTargets');
                     const allTargets = targetsMsg.result?.targetInfos || [];
 
+                    // Periodic diagnostic log (every ~30s = 20 cycles at 1.5s)
+                    cdpCycleCount++;
+                    const isStatusCycle = (cdpCycleCount % 20 === 0);
 
-
-                    // 4. Find webview targets
-                    let webviews = allTargets.filter(t =>
+                    // 4. Collect ALL candidate targets: webviews + page targets
+                    const webviews = allTargets.filter(t =>
                         t.url && (
                             t.url.includes('vscode-webview://') ||
                             t.url.includes('webview') ||
                             t.type === 'iframe'
                         )
                     );
+                    const pageTargets = allTargets.filter(t => t.type === 'page');
 
-                    // 5. No webview targets — attach to page targets and check for DOM
-                    if (webviews.length === 0) {
-                        const pageTargets = allTargets.filter(t => t.type === 'page');
+                    if (isStatusCycle) log(`[CDP] Status: ${allTargets.length} targets, ${pageTargets.length} pages, ${webviews.length} webviews (port ${port})`);
 
-                        for (const page of pageTargets) {
-                            try {
-                                const attachMsg = await send('Target.attachToTarget', { targetId: page.targetId, flatten: true });
-                                const sessionId = attachMsg.result?.sessionId;
-                                if (!sessionId) continue;
+                    // 5. Evaluate on ALL targets concurrently (webviews + pages)
+                    const allEvalTargets = [
+                        ...webviews.map(t => ({ ...t, kind: 'Webview' })),
+                        ...pageTargets.map(t => ({ ...t, kind: 'Page' }))
+                    ];
 
-                                // Check if this page has DOM access
-                                const evalMsg = await send('Runtime.evaluate', {
+                    const evalPromises = allEvalTargets.map(async (target) => {
+                        try {
+                            const targetId = target.targetId;
+                            const shortId = targetId.substring(0, 6);
+                            const kind = target.kind;
+
+                            const attachMsg = await send('Target.attachToTarget', { targetId, flatten: true });
+                            const sessionId = attachMsg.result?.sessionId;
+                            if (!sessionId) return;
+
+                            // For page targets, check DOM access first
+                            if (kind === 'Page') {
+                                const domCheck = await send('Runtime.evaluate', {
                                     expression: 'typeof document !== "undefined" ? document.title || "has-dom" : "no-dom"'
                                 }, sessionId);
-                                const domResult = evalMsg.result?.result?.value;
-
-                                // If page has DOM, run the clicker script
-                                if (domResult && domResult !== 'no-dom') {
-                                    const now = Date.now();
-                                    const canExpand = !lastExpandTimes[page.targetId] || (now - lastExpandTimes[page.targetId] >= 8000);
-                                    const dynamicScript = scriptGenerator(canExpand);
-                                    const scriptMsg = await send('Runtime.evaluate', { expression: dynamicScript }, sessionId);
-                                    const result = scriptMsg.result?.result?.value;
-
-                                    if (result && result.startsWith('clicked:')) {
-                                        if (result.includes('expand') || result.includes('requires input')) {
-                                            lastExpandTimes[page.targetId] = Date.now();
-                                        }
-                                        log(`[CDP] \u2713 Thread [${page.targetId.substring(0, 6)}] -> ${result}`);
-                                    }
+                                const domResult = domCheck.result?.result?.value;
+                                if (!domResult || domResult === 'no-dom') {
+                                    await send('Target.detachFromTarget', { sessionId }).catch(() => { });
+                                    return;
                                 }
-
-                                await send('Target.detachFromTarget', { sessionId }).catch(() => { });
-                            } catch (e) {
-                                // Silent — page may not support DOM access
                             }
-                        }
-                    } else {
 
-                        // Tunnel into each webview concurrently
-                        const evalPromises = webviews.map(async (wv) => {
-                            try {
-                                const targetId = wv.targetId;
-                                const shortId = targetId.substring(0, 6);
+                            const now = Date.now();
+                            const canExpand = !lastExpandTimes[targetId] || (now - lastExpandTimes[targetId] >= 8000);
+                            const dynamicScript = scriptGenerator(canExpand);
 
-                                const attachMsg = await send('Target.attachToTarget', { targetId, flatten: true });
-                                const sessionId = attachMsg.result?.sessionId;
-                                if (!sessionId) return;
+                            const evalMsg = await send('Runtime.evaluate', { expression: dynamicScript }, sessionId);
+                            const result = evalMsg.result?.result?.value;
 
-                                const now = Date.now();
-                                const canExpand = !lastExpandTimes[targetId] || (now - lastExpandTimes[targetId] >= 8000);
-                                const dynamicScript = scriptGenerator(canExpand);
-
-                                const evalMsg = await send('Runtime.evaluate', { expression: dynamicScript }, sessionId);
-                                const result = evalMsg.result?.result?.value;
-
-                                if (result && result.startsWith('clicked:')) {
-                                    if (result.includes('expand') || result.includes('requires input')) {
-                                        lastExpandTimes[targetId] = Date.now();
-                                    }
-                                    log(`[CDP] \u2713 Thread [${shortId}] -> ${result}`);
+                            if (result && result.startsWith('clicked:')) {
+                                if (result.includes('expand') || result.includes('requires input')) {
+                                    lastExpandTimes[targetId] = Date.now();
                                 }
+                                log(`[CDP] \u2713 Thread [${shortId}] -> ${result}`);
+                            } else if (isStatusCycle) {
+                                log(`[CDP] ${kind} [${shortId}] -> ${result || 'undefined'} (url: ${(target.url || '').substring(0, 60)})`);
+                            }
 
-                                await send('Target.detachFromTarget', { sessionId }).catch(() => { });
-                            } catch (e) { /* silent */ }
-                        });
+                            await send('Target.detachFromTarget', { sessionId }).catch(() => { });
+                        } catch (e) { /* silent */ }
+                    });
 
-                        await Promise.allSettled(evalPromises);
-                    }
+                    await Promise.allSettled(evalPromises);
 
                     clearTimeout(timeout);
                     ws.close();
